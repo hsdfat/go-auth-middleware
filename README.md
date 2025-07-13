@@ -1,6 +1,6 @@
 # Go Auth Middleware
 
-A flexible JWT authentication middleware for Gin framework with bcrypt password hashing and token storage support.
+A flexible JWT authentication middleware for Gin and Fiber frameworks with bcrypt password hashing and token storage support.
 
 ## Features
 
@@ -10,7 +10,7 @@ A flexible JWT authentication middleware for Gin framework with bcrypt password 
 - Token refresh functionality
 - Cookie support
 - Flexible configuration
-- Middleware for Gin framework
+- Middleware for Gin and Fiber frameworks
 
 ## Installation
 
@@ -302,13 +302,108 @@ GET /api/profile
 Authorization: Bearer <token>
 ```
 
+## Fiber Framework Support
+
+The middleware also supports the Fiber framework through the `fiberauth` package:
+
+### Quick Start with Fiber
+
+```go
+package main
+
+import (
+    "github.com/gofiber/fiber/v2"
+    "github.com/hsdfat/go-auth-middleware/fiberauth"
+)
+
+func main() {
+    app := fiber.New()
+
+    // Create user provider
+    users := map[string]fiberauth.User{
+        "admin": {ID: 1, Username: "admin", Password: "admin123"},
+        "user":  {ID: 2, Username: "user", Password: "user123"},
+    }
+    userProvider := fiberauth.NewMapUserProvider(users)
+
+    // Create token storage
+    tokenStorage := fiberauth.NewInMemoryTokenStorage()
+
+    // Create auth middleware
+    authMiddleware := fiberauth.NewFiberAuthMiddleware(fiberauth.AuthConfig{
+        SecretKey:    "your-secret-key",
+        TokenStorage: tokenStorage,
+        Authenticator: authenticator(userProvider),
+        Authorizator:  authorizator,
+    })
+
+    // Routes
+    app.Post("/login", authMiddleware.LoginHandler())
+    app.Post("/logout", authMiddleware.LogoutHandler())
+    app.Post("/refresh", authMiddleware.RefreshHandler())
+
+    // Protected routes
+    protected := app.Group("/protected")
+    protected.Use(authMiddleware.MiddlewareFunc())
+    {
+        protected.Get("/", func(c *fiber.Ctx) error {
+            return c.JSON(fiber.Map{
+                "message": "Protected route",
+                "user_id": c.Locals("identity"),
+            })
+        })
+    }
+
+    app.Listen(":3000")
+}
+```
+
+### Fiber Configuration
+
+The Fiber middleware uses the same configuration structure as the Gin middleware, but with Fiber-specific context types:
+
+```go
+type AuthConfig struct {
+    SecretKey       string
+    TokenLookup     string
+    TokenHeadName   string
+    Realm           string
+    IdentityKey     string
+    IdentityHandler func(c *fiber.Ctx) interface{}
+    Authenticator   func(c *fiber.Ctx) (interface{}, error)
+    Authorizator    func(data interface{}, c *fiber.Ctx) bool
+    PayloadFunc     func(data interface{}) jwt.MapClaims
+    Unauthorized    func(c *fiber.Ctx, code int, message string)
+    LoginResponse   func(c *fiber.Ctx, code int, token string, expire time.Time)
+    LogoutResponse  func(c *fiber.Ctx, code int)
+    RefreshResponse func(c *fiber.Ctx, code int, token string, expire time.Time)
+    TimeFunc        func() time.Time
+    Timeout         time.Duration
+    MaxRefresh      time.Duration
+    SendCookie      bool
+    CookieName      string
+    CookieMaxAge    int
+    CookieDomain    string
+    CookieHTTPOnly  bool
+    CookieSameSite  string
+    TokenStorage    TokenStorage
+    UseBcrypt       bool
+    // Token storage configuration
+    EnableTokenStorage     bool
+    TokenStorageMode       string
+    StoreTokenOnLogin      bool
+    ValidateTokenOnRequest bool
+}
+```
+
 ## Example Usage
 
-See the `example/` directory for a complete working example.
+See the `examples/` directory for complete working examples for both Gin and Fiber frameworks.
 
 ## Dependencies
 
-- `github.com/gin-gonic/gin` - Web framework
+- `github.com/gin-gonic/gin` - Gin web framework
+- `github.com/gofiber/fiber/v2` - Fiber web framework
 - `github.com/golang-jwt/jwt/v5` - JWT handling
 - `golang.org/x/crypto/bcrypt` - Password hashing
 
