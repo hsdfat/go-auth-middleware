@@ -265,7 +265,7 @@ func (mw *GinAuthMiddleware) jwtFromHeader(c *gin.Context, key string) string {
 	}
 
 	authHeaderParts := strings.Split(authHeader, " ")
-	if len(authHeaderParts) != 2 || strings.ToLower(authHeaderParts[0]) != strings.ToLower(mw.Config.TokenHeadName) {
+	if len(authHeaderParts) != 2 || !strings.EqualFold(authHeaderParts[0], mw.Config.TokenHeadName) {
 		return ""
 	}
 
