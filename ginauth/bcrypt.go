@@ -5,20 +5,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/hsdfat/go-auth-middleware/core"
 )
 
-// HashPassword creates a bcrypt hash of the password
-func HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	return string(bytes), err
-}
-
-// CheckPasswordHash compares a password with its hash
-func CheckPasswordHash(password, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	return err == nil
-}
+// Re-export core bcrypt functions for backward compatibility
+var (
+	HashPassword      = core.HashPassword
+	CheckPasswordHash = core.CheckPasswordHash
+	HashToken         = core.HashToken
+	CheckTokenHash    = core.CheckTokenHash
+)
 
 // CreateUserWithBcrypt creates a new user with bcrypt password hashing
 func CreateUserWithBcrypt(id int, username, password string) (*User, error) {
@@ -52,15 +48,7 @@ func CreateUserMapWithBcrypt(users []struct {
 
 // NewMapUserProvider creates a new map-based user provider
 func NewMapUserProvider(users map[string]User) *MapUserProvider {
-	return &MapUserProvider{users: users}
-}
-
-// GetUserByUsername retrieves a user by username from the map
-func (m *MapUserProvider) GetUserByUsername(username string) (*User, error) {
-	if user, exists := m.users[username]; exists {
-		return &user, nil
-	}
-	return nil, errors.New("user not found")
+	return core.NewMapUserProvider(users)
 }
 
 // NewDatabaseUserProvider creates a new database-based user provider

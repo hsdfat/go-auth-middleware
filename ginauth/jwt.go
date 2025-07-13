@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/hsdfat/go-auth-middleware/core"
 )
 
 // Error definitions
@@ -116,9 +117,7 @@ func New(config AuthConfig) *GinAuthMiddleware {
 
 // NewInMemoryTokenStorage creates a new in-memory token storage
 func NewInMemoryTokenStorage() *InMemoryTokenStorage {
-	return &InMemoryTokenStorage{
-		tokens: make(map[string]tokenData),
-	}
+	return core.NewInMemoryTokenStorage()
 }
 
 // MiddlewareFunc returns the Gin middleware function
@@ -600,40 +599,4 @@ func generateTokenID(data interface{}) string {
 		}
 	}
 	return fmt.Sprintf("token_%d", time.Now().UnixNano())
-}
-
-// InMemoryTokenStorage methods
-func (s *InMemoryTokenStorage) StoreToken(tokenID string, token string, expiresAt time.Time) error {
-	s.tokens[tokenID] = tokenData{token: token, expiresAt: expiresAt}
-	return nil
-}
-
-func (s *InMemoryTokenStorage) GetToken(tokenID string) (string, error) {
-	if tokenData, exists := s.tokens[tokenID]; exists {
-		if time.Now().Before(tokenData.expiresAt) {
-			return tokenData.token, nil
-		}
-		// Token expired, remove it
-		delete(s.tokens, tokenID)
-	}
-	return "", errors.New("token not found or expired")
-}
-
-func (s *InMemoryTokenStorage) DeleteToken(tokenID string) error {
-	delete(s.tokens, tokenID)
-	return nil
-}
-
-func (s *InMemoryTokenStorage) IsTokenValid(tokenID string) (bool, error) {
-	if tokenData, exists := s.tokens[tokenID]; exists {
-		return time.Now().Before(tokenData.expiresAt), nil
-	}
-	return false, nil
-}
-
-func (s *InMemoryTokenStorage) RevokeAllUserTokens(userID interface{}) error {
-	// In a real implementation, you would need to maintain a mapping of userID to tokenIDs
-	// For simplicity, this implementation clears all tokens
-	s.tokens = make(map[string]tokenData)
-	return nil
 }

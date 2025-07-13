@@ -5,32 +5,15 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/hsdfat/go-auth-middleware/core"
 )
 
-// User represents a user for authentication
-type User struct {
-	ID           int    `json:"id"`
-	Username     string `json:"username"`
-	Password     string `json:"-"`
-	PasswordHash string `json:"-"`
-}
-
-type MapUserProvider struct {
-	users map[string]User
-}
-
-type DatabaseUserProvider struct {
-	// Add your database connection or client here
-}
-
-type tokenData struct {
-	token     string
-	expiresAt time.Time
-}
-
-type InMemoryTokenStorage struct {
-	tokens map[string]tokenData
-}
+// Re-export core types for backward compatibility
+type User = core.User
+type MapUserProvider = core.MapUserProvider
+type DatabaseUserProvider = core.DatabaseUserProvider
+type InMemoryTokenStorage = core.InMemoryTokenStorage
+type Claims = core.Claims
 
 // AuthConfig holds configuration for the authentication middleware
 type AuthConfig struct {
@@ -67,10 +50,4 @@ type AuthConfig struct {
 
 type FiberAuthMiddleware struct {
 	Config AuthConfig
-}
-
-type Claims struct {
-	UserID   interface{} `json:"user_id"`
-	Username string      `json:"username"`
-	jwt.RegisteredClaims
 }
