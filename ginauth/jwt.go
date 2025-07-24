@@ -12,17 +12,25 @@ import (
 	"github.com/hsdfat/go-auth-middleware/core"
 )
 
-// Error definitions
+// Enhanced error definitions
 var (
 	ErrEmptyAuthorizationHeader = errors.New("authorization header is empty")
 	ErrInvalidSigningAlgorithm  = errors.New("invalid signing algorithm")
 	ErrExpiredToken             = errors.New("token is expired")
 	ErrMissingAuthenticatorFunc = errors.New("missing authenticator function")
 	ErrForbidden                = errors.New("you don't have permission to access this resource")
+	ErrInvalidRefreshToken      = errors.New("invalid refresh token")
+	ErrInactiveUser             = errors.New("user account is inactive")
+	ErrSessionNotFound          = errors.New("session not found")
 )
 
-// New creates a new authentication middleware instance
-func New(config AuthConfig) *GinAuthMiddleware {
+// Enhanced GinAuthMiddleware with refresh token support
+type EnhancedGinAuthMiddleware struct {
+	Config EnhancedAuthConfig
+}
+
+// NewEnhanced creates a new enhanced authentication middleware instance
+func NewEnhanced(config EnhancedAuthConfig) *EnhancedGinAuthMiddleware {
 	// Set default values
 	if config.Realm == "" {
 		config.Realm = "gin auth"
@@ -36,11 +44,11 @@ func New(config AuthConfig) *GinAuthMiddleware {
 	if config.TokenHeadName == "" {
 		config.TokenHeadName = "Bearer"
 	}
-	if config.Timeout == 0 {
-		config.Timeout = time.Hour
+	if config.AccessTokenTimeout == 0 {
+		config.AccessTokenTimeout = 15 * time.Minute // Short-lived access tokens
 	}
-	if config.MaxRefresh == 0 {
-		config.MaxRefresh = time.Hour
+	if config.RefreshTokenTimeout == 0 {
+		config.RefreshTokenTimeout = 7 * 24 * time.Hour // 7 days
 	}
 	if config.TimeFunc == nil {
 		config.TimeFunc = time.Now
@@ -48,33 +56,23 @@ func New(config AuthConfig) *GinAuthMiddleware {
 	if config.CookieName == "" {
 		config.CookieName = "jwt"
 	}
+	if config.RefreshCookieName == "" {
+		config.RefreshCookieName = "refresh_jwt"
+	}
 	if config.CookieMaxAge == 0 {
-		config.CookieMaxAge = 86400 // 24 hours
+		config.CookieMaxAge = int(config.RefreshTokenTimeout.Seconds())
 	}
 
 	// Set default token storage if not provided
 	if config.TokenStorage == nil {
-		config.TokenStorage = NewInMemoryTokenStorage()
-	}
-
-	// Set default token storage configuration
-	if config.TokenStorageMode == "" {
-		config.TokenStorageMode = "jwt" // Default to JWT mode
-	}
-	if !config.EnableTokenStorage {
-		config.EnableTokenStorage = true // Default to enabled
-	}
-	if !config.StoreTokenOnLogin {
-		config.StoreTokenOnLogin = true // Default to storing tokens on login
-	}
-	if !config.ValidateTokenOnRequest {
-		config.ValidateTokenOnRequest = true // Default to validating tokens on requests
+		config.TokenStorage = core.NewInMemoryTokenStorage()
 	}
 
 	// Set default handlers
 	if config.Unauthorized == nil {
 		config.Unauthorized = func(c *gin.Context, code int, message string) {
 			c.JSON(code, gin.H{
+				"error":   true,
 				"code":    code,
 				"message": message,
 			})
@@ -82,114 +80,106 @@ func New(config AuthConfig) *GinAuthMiddleware {
 	}
 
 	if config.LoginResponse == nil {
-		config.LoginResponse = func(c *gin.Context, code int, token string, expire time.Time) {
+		config.LoginResponse = func(c *gin.Context, code int, tokenPair core.TokenPair, user *core.User) {
 			c.JSON(code, gin.H{
-				"code":   code,
-				"token":  token,
-				"expire": expire.Format(time.RFC3339),
+				"success": true,
+				"code":    code,
+				"data": gin.H{
+					"access_token":            tokenPair.AccessToken,
+					"refresh_token":           tokenPair.RefreshToken,
+					"access_token_expires_at": tokenPair.AccessTokenExpiresAt.Unix(),
+					"refresh_token_expires_at": tokenPair.RefreshTokenExpiresAt.Unix(),
+					"token_type":              tokenPair.TokenType,
+					"user": gin.H{
+						"id":       user.ID,
+						"username": user.Username,
+						"email":    user.Email,
+						"role":     user.Role,
+					},
+				},
 			})
 		}
 	}
 
 	if config.LogoutResponse == nil {
-		config.LogoutResponse = func(c *gin.Context, code int) {
+		config.LogoutResponse = func(c *gin.Context, code int, message string) {
 			c.JSON(code, gin.H{
+				"success": true,
 				"code":    code,
-				"message": "Successfully logged out",
+				"message": message,
 			})
 		}
 	}
 
 	if config.RefreshResponse == nil {
-		config.RefreshResponse = func(c *gin.Context, code int, token string, expire time.Time) {
+		config.RefreshResponse = func(c *gin.Context, code int, tokenPair core.TokenPair) {
 			c.JSON(code, gin.H{
-				"code":   code,
-				"token":  token,
-				"expire": expire.Format(time.RFC3339),
+				"success": true,
+				"code":    code,
+				"data": gin.H{
+					"access_token":             tokenPair.AccessToken,
+					"refresh_token":            tokenPair.RefreshToken,
+					"access_token_expires_at":  tokenPair.AccessTokenExpiresAt.Unix(),
+					"refresh_token_expires_at": tokenPair.RefreshTokenExpiresAt.Unix(),
+					"token_type":               tokenPair.TokenType,
+				},
 			})
 		}
 	}
 
-	return &GinAuthMiddleware{
+	return &EnhancedGinAuthMiddleware{
 		Config: config,
 	}
 }
 
-// NewInMemoryTokenStorage creates a new in-memory token storage
-func NewInMemoryTokenStorage() *InMemoryTokenStorage {
-	return core.NewInMemoryTokenStorage()
-}
-
-// MiddlewareFunc returns the Gin middleware function
-func (mw *GinAuthMiddleware) MiddlewareFunc() gin.HandlerFunc {
+// MiddlewareFunc returns the enhanced Gin middleware function
+func (mw *EnhancedGinAuthMiddleware) MiddlewareFunc() gin.HandlerFunc {
 	return gin.HandlerFunc(func(c *gin.Context) {
 		mw.middlewareImpl(c)
 	})
 }
 
-// middlewareImpl implements the middleware logic
-func (mw *GinAuthMiddleware) middlewareImpl(c *gin.Context) {
-	claims, err := mw.GetClaimsFromJWT(c)
+// middlewareImpl implements the enhanced middleware logic
+func (mw *EnhancedGinAuthMiddleware) middlewareImpl(c *gin.Context) {
+	claims, sessionID, err := mw.GetClaimsFromJWT(c)
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
 		return
 	}
+	// Validate session and token storage
+	if mw.Config.TokenStorage != nil {
+		// Check if access token is valid in storage
+		if valid, err := mw.Config.TokenStorage.IsAccessTokenValid(sessionID); err != nil || !valid {
+			mw.unauthorized(c, http.StatusUnauthorized, "Token not found or invalid")
+			return
+		}
 
-	// Check token storage if enabled and configured
-	if mw.Config.EnableTokenStorage && mw.Config.ValidateTokenOnRequest && mw.Config.TokenStorage != nil {
-		// Extract token from request
-		tokenString := mw.extractTokenString(c)
-		if tokenString != "" {
-			// Generate token ID to check in storage
-			tokenID := generateTokenID(map[string]interface{}{
-				"user_id":  claims["user_id"],
-				"username": claims["username"],
-			})
-
-			// Check if token is valid in storage
-			if valid, err := mw.Config.TokenStorage.IsTokenValid(tokenID); err != nil || !valid {
-				mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrExpiredToken, c))
-				return
-			}
-
-			// Additional validation based on storage mode
-			if storedToken, err := mw.Config.TokenStorage.GetToken(tokenID); err == nil {
-				switch mw.Config.TokenStorageMode {
-				case "bcrypt":
-					// For bcrypt mode, verify the token hash
-					if mw.Config.UseBcrypt {
-						if !CheckPasswordHash(tokenString, storedToken) {
-							mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrExpiredToken, c))
-							return
-						}
-					}
-				case "both":
-					// For both mode, check if stored token contains the current token
-					if mw.Config.UseBcrypt {
-						parts := strings.Split(storedToken, ":")
-						if len(parts) == 2 {
-							// Check JWT part
-							if parts[0] != tokenString {
-								mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrExpiredToken, c))
-								return
-							}
-							// Check bcrypt hash part
-							if !CheckPasswordHash(tokenString, parts[1]) {
-								mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrExpiredToken, c))
-								return
-							}
-						}
-					}
-				}
-			}
+		// Update session activity
+		mw.Config.TokenStorage.UpdateSessionActivity(sessionID, mw.Config.TimeFunc())
+	}
+	// Check if user is still active
+	if mw.Config.UserProvider != nil {
+		if active, err := mw.Config.UserProvider.IsUserActive(claims.UserID); err != nil || !active {
+			mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrInactiveUser, c))
+			return
 		}
 	}
 
-	if mw.Config.IdentityHandler != nil {
-		identity := mw.Config.IdentityHandler(c)
-		c.Set(mw.Config.IdentityKey, identity)
+	// Set claims and user data in context
+	c.Set("JWT_PAYLOAD", claims)
+	c.Set("SESSION_ID", sessionID)
+	c.Set(mw.Config.IdentityKey, claims.UserID)
+	c.Set("user_email", claims.Email)
+	c.Set("user_role", claims.Role)
+	c.Set("username", claims.Username)
+
+	// Check role-based authorization
+	if mw.Config.RoleAuthorizator != nil && !mw.Config.RoleAuthorizator(claims.Role, c) {
+		mw.unauthorized(c, http.StatusForbidden, mw.HTTPStatusMessageFunc(ErrForbidden, c))
+		return
 	}
 
+	// Check general authorization
 	if mw.Config.Authorizator != nil && !mw.Config.Authorizator(claims, c) {
 		mw.unauthorized(c, http.StatusForbidden, mw.HTTPStatusMessageFunc(ErrForbidden, c))
 		return
@@ -198,31 +188,33 @@ func (mw *GinAuthMiddleware) middlewareImpl(c *gin.Context) {
 	c.Next()
 }
 
-// GetClaimsFromJWT extracts claims from JWT token
-func (mw *GinAuthMiddleware) GetClaimsFromJWT(c *gin.Context) (jwt.MapClaims, error) {
+// GetClaimsFromJWT extracts claims from JWT token with session validation
+func (mw *EnhancedGinAuthMiddleware) GetClaimsFromJWT(c *gin.Context) (*core.Claims, string, error) {
 	token, err := mw.parseToken(c)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	if mw.Config.TimeFunc().Unix() > token.Claims.(*Claims).ExpiresAt.Unix() {
-		return nil, ErrExpiredToken
+	claims, ok := token.Claims.(*core.Claims)
+	if !ok {
+		return nil, "", errors.New("invalid token claims")
 	}
 
-	claims := token.Claims.(*Claims)
-	c.Set("JWT_PAYLOAD", claims)
-	c.Set(mw.Config.IdentityKey, claims.UserID)
+	// Check if token is expired
+	if mw.Config.TimeFunc().Unix() > claims.ExpiresAt.Unix() {
+		return nil, "", ErrExpiredToken
+	}
 
-	return jwt.MapClaims{
-		"user_id":  claims.UserID,
-		"username": claims.Username,
-		"exp":      claims.ExpiresAt.Unix(),
-		"iat":      claims.IssuedAt.Unix(),
-	}, nil
+	// Validate token type
+	if claims.TokenType != "access" {
+		return nil, "", errors.New("invalid token type")
+	}
+
+	return claims, claims.SessionID, nil
 }
 
 // parseToken parses the JWT token from the request
-func (mw *GinAuthMiddleware) parseToken(c *gin.Context) (*jwt.Token, error) {
+func (mw *EnhancedGinAuthMiddleware) parseToken(c *gin.Context) (*jwt.Token, error) {
 	var token string
 
 	methods := strings.Split(mw.Config.TokenLookup, ",")
@@ -248,7 +240,7 @@ func (mw *GinAuthMiddleware) parseToken(c *gin.Context) (*jwt.Token, error) {
 		return nil, ErrEmptyAuthorizationHeader
 	}
 
-	return jwt.ParseWithClaims(token, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+	return jwt.ParseWithClaims(token, &core.Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if jwt.GetSigningMethod("HS256") != token.Method {
 			return nil, ErrInvalidSigningAlgorithm
 		}
@@ -257,7 +249,7 @@ func (mw *GinAuthMiddleware) parseToken(c *gin.Context) (*jwt.Token, error) {
 }
 
 // jwtFromHeader extracts JWT token from header
-func (mw *GinAuthMiddleware) jwtFromHeader(c *gin.Context, key string) string {
+func (mw *EnhancedGinAuthMiddleware) jwtFromHeader(c *gin.Context, key string) string {
 	authHeader := c.Request.Header.Get(key)
 	if authHeader == "" {
 		return ""
@@ -272,308 +264,421 @@ func (mw *GinAuthMiddleware) jwtFromHeader(c *gin.Context, key string) string {
 }
 
 // jwtFromQuery extracts JWT token from query parameter
-func (mw *GinAuthMiddleware) jwtFromQuery(c *gin.Context, key string) string {
-	token := c.Query(key)
-	if token == "" {
-		return ""
-	}
-	return token
+func (mw *EnhancedGinAuthMiddleware) jwtFromQuery(c *gin.Context, key string) string {
+	return c.Query(key)
 }
 
 // jwtFromCookie extracts JWT token from cookie
-func (mw *GinAuthMiddleware) jwtFromCookie(c *gin.Context, key string) string {
+func (mw *EnhancedGinAuthMiddleware) jwtFromCookie(c *gin.Context, key string) string {
 	cookie, _ := c.Cookie(key)
 	return cookie
 }
 
-// extractTokenString extracts the token string from the request
-func (mw *GinAuthMiddleware) extractTokenString(c *gin.Context) string {
-	var token string
-
-	methods := strings.Split(mw.Config.TokenLookup, ",")
-	for _, method := range methods {
-		if len(token) > 0 {
-			break
-		}
-		parts := strings.Split(strings.TrimSpace(method), ":")
-		k := strings.TrimSpace(parts[0])
-		v := strings.TrimSpace(parts[1])
-
-		switch k {
-		case "header":
-			token = mw.jwtFromHeader(c, v)
-		case "query":
-			token = mw.jwtFromQuery(c, v)
-		case "cookie":
-			token = mw.jwtFromCookie(c, v)
-		}
-	}
-
-	return token
-}
-
-// LoginHandler handles user login
-func (mw *GinAuthMiddleware) LoginHandler(c *gin.Context) {
+// LoginHandler handles user login with enhanced token pair generation
+func (mw *EnhancedGinAuthMiddleware) LoginHandler(c *gin.Context) {
 	if mw.Config.Authenticator == nil {
 		mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(ErrMissingAuthenticatorFunc, c))
 		return
 	}
 
-	data, err := mw.Config.Authenticator(c)
+	user, err := mw.Config.Authenticator(c)
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
 		return
 	}
 
-	// Create the token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, mw.GetClaimsFunc()(data))
-	tokenString, err := token.SignedString([]byte(mw.Config.SecretKey))
-	if err != nil {
-		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
+	// Check if user is active
+	if !user.IsActive {
+		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrInactiveUser, c))
 		return
 	}
 
-	expire := mw.Config.TimeFunc().Add(mw.Config.Timeout)
+	// Generate session ID
+	sessionID, err := core.GenerateSessionID()
+	if err != nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "Failed to generate session ID")
+		return
+	}
 
-	// Store token in storage based on configuration
-	if mw.Config.EnableTokenStorage && mw.Config.StoreTokenOnLogin && mw.Config.TokenStorage != nil {
-		// Generate a unique token ID
-		tokenID := generateTokenID(data)
+	// Create token pair
+	tokenPair, err := mw.generateTokenPair(user, sessionID)
+	if err != nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "Failed to generate tokens")
+		return
+	}
 
-		// Determine what to store based on TokenStorageMode
-		var tokenToStore string
-		switch mw.Config.TokenStorageMode {
-		case "jwt":
-			tokenToStore = tokenString
-		case "bcrypt":
-			// For bcrypt mode, we could store a hash of the token
-			if mw.Config.UseBcrypt {
-				hashedToken, hashErr := HashPassword(tokenString)
-				if hashErr != nil {
-					mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(hashErr, c))
-					return
-				}
-				tokenToStore = hashedToken
-			} else {
-				tokenToStore = tokenString
-			}
-		case "both":
-			// Store both JWT and bcrypt hash
-			if mw.Config.UseBcrypt {
-				hashedToken, hashErr := HashPassword(tokenString)
-				if hashErr != nil {
-					mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(hashErr, c))
-					return
-				}
-				tokenToStore = tokenString + ":" + hashedToken
-			} else {
-				tokenToStore = tokenString
-			}
-		default:
-			tokenToStore = tokenString
-		}
-
-		err = mw.Config.TokenStorage.StoreToken(tokenID, tokenToStore, expire)
+	// Store token pair in storage
+	if mw.Config.TokenStorage != nil {
+		err = mw.Config.TokenStorage.StoreTokenPair(
+			sessionID,
+			tokenPair.AccessToken,
+			tokenPair.RefreshToken,
+			tokenPair.AccessTokenExpiresAt,
+			tokenPair.RefreshTokenExpiresAt,
+			user.ID,
+		)
 		if err != nil {
-			mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(err, c))
+			mw.unauthorized(c, http.StatusInternalServerError, "Failed to store tokens")
 			return
 		}
-		// Store token ID in context for later use
-		c.Set("token_id", tokenID)
-		c.Set("token_storage_mode", mw.Config.TokenStorageMode)
+
+		// Store user session information
+		session := core.UserSession{
+			SessionID:    sessionID,
+			UserID:       user.ID,
+			Username:     user.Username,
+			Email:        user.Email,
+			Role:         user.Role,
+			CreatedAt:    mw.Config.TimeFunc(),
+			LastActivity: mw.Config.TimeFunc(),
+			IPAddress:    c.ClientIP(),
+			UserAgent:    c.Request.UserAgent(),
+		}
+		mw.Config.TokenStorage.StoreUserSession(session)
 	}
 
+	// Update user last login
+	if mw.Config.UserProvider != nil {
+		mw.Config.UserProvider.UpdateUserLastLogin(user.ID, mw.Config.TimeFunc())
+	}
+
+	// Set cookies if enabled
 	if mw.Config.SendCookie {
-		c.SetCookie(
-			mw.Config.CookieName,
-			tokenString,
-			mw.Config.CookieMaxAge,
-			"/",
-			mw.Config.CookieDomain,
-			false,
-			mw.Config.CookieHTTPOnly,
-		)
+		mw.setCookies(c, tokenPair)
 	}
 
-	mw.Config.LoginResponse(c, http.StatusOK, tokenString, expire)
+	// Store user and session in context for response
+	c.Set("user", user)
+	c.Set("session_id", sessionID)
+
+	mw.Config.LoginResponse(c, http.StatusOK, *tokenPair, user)
 }
 
-// LogoutHandler handles user logout
-func (mw *GinAuthMiddleware) LogoutHandler(c *gin.Context) {
-	// Handle token storage cleanup based on configuration
-	if mw.Config.EnableTokenStorage && mw.Config.TokenStorage != nil {
-		// Get token ID from context if available
-		if tokenID, exists := c.Get("token_id"); exists {
-			if tokenIDStr, ok := tokenID.(string); ok {
-				// Delete the specific token
-				mw.Config.TokenStorage.DeleteToken(tokenIDStr)
-			}
-		}
-
-		// Revoke all tokens for the current user if available
-		if claims, exists := c.Get("JWT_PAYLOAD"); exists {
-			if jwtClaims, ok := claims.(*Claims); ok {
-				mw.Config.TokenStorage.RevokeAllUserTokens(jwtClaims.UserID)
-			}
+// LogoutHandler handles user logout with comprehensive cleanup
+func (mw *EnhancedGinAuthMiddleware) LogoutHandler(c *gin.Context) {
+	sessionID, exists := c.Get("SESSION_ID")
+	if !exists {
+		// Try to extract session ID from token
+		if _, sID, err := mw.GetClaimsFromJWT(c); err == nil {
+			sessionID = sID
 		}
 	}
 
+	// Clean up tokens and session
+	if mw.Config.TokenStorage != nil && sessionID != nil {
+		if sessionIDStr, ok := sessionID.(string); ok {
+			// Delete token pair and session
+			mw.Config.TokenStorage.DeleteTokenPair(sessionIDStr)
+		}
+	}
+
+	// Clear cookies if enabled
 	if mw.Config.SendCookie {
-		c.SetCookie(
-			mw.Config.CookieName,
-			"",
-			-1,
-			"/",
-			mw.Config.CookieDomain,
-			false,
-			mw.Config.CookieHTTPOnly,
-		)
+		mw.clearCookies(c)
 	}
 
-	mw.Config.LogoutResponse(c, http.StatusOK)
+	mw.Config.LogoutResponse(c, http.StatusOK, "Successfully logged out")
+}
+
+// LogoutAllHandler handles logout from all devices
+func (mw *EnhancedGinAuthMiddleware) LogoutAllHandler(c *gin.Context) {
+	userID := c.MustGet(mw.Config.IdentityKey).(int)
+	
+	// Revoke all user tokens
+	if mw.Config.TokenStorage != nil {
+		err := mw.Config.TokenStorage.RevokeAllUserTokens(userID)
+		if err != nil {
+			mw.unauthorized(c, http.StatusInternalServerError, "Failed to logout from all devices")
+			return
+		}
+	}
+
+	// Clear cookies if enabled
+	if mw.Config.SendCookie {
+		mw.clearCookies(c)
+	}
+
+	mw.Config.LogoutResponse(c, http.StatusOK, "Successfully logged out from all devices")
 }
 
 // RefreshHandler handles token refresh
-func (mw *GinAuthMiddleware) RefreshHandler(c *gin.Context) {
-	tokenString, expire, err := mw.RefreshToken(c)
-	if err != nil {
-		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(err, c))
+func (mw *EnhancedGinAuthMiddleware) RefreshHandler(c *gin.Context) {
+	// Get refresh token from request
+	refreshToken := mw.getRefreshToken(c)
+	if refreshToken == "" {
+		mw.unauthorized(c, http.StatusUnauthorized, "Missing refresh token")
 		return
 	}
 
-	// Store new token in storage based on configuration
-	if mw.Config.EnableTokenStorage && mw.Config.StoreTokenOnLogin && mw.Config.TokenStorage != nil {
-		// Get user data from existing claims
-		if claims, exists := c.Get("JWT_PAYLOAD"); exists {
-			if jwtClaims, ok := claims.(*Claims); ok {
-				tokenID := generateTokenID(map[string]interface{}{
-					"user_id":  jwtClaims.UserID,
-					"username": jwtClaims.Username,
-				})
+	// Parse and validate refresh token
+	token, err := jwt.ParseWithClaims(refreshToken, &core.RefreshTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if jwt.GetSigningMethod("HS256") != token.Method {
+			return nil, ErrInvalidSigningAlgorithm
+		}
+		return []byte(mw.Config.RefreshSecretKey), nil
+	})
 
-				// Determine what to store based on TokenStorageMode
-				var tokenToStore string
-				switch mw.Config.TokenStorageMode {
-				case "jwt":
-					tokenToStore = tokenString
-				case "bcrypt":
-					if mw.Config.UseBcrypt {
-						hashedToken, hashErr := HashPassword(tokenString)
-						if hashErr != nil {
-							mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(hashErr, c))
-							return
-						}
-						tokenToStore = hashedToken
-					} else {
-						tokenToStore = tokenString
-					}
-				case "both":
-					if mw.Config.UseBcrypt {
-						hashedToken, hashErr := HashPassword(tokenString)
-						if hashErr != nil {
-							mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(hashErr, c))
-							return
-						}
-						tokenToStore = tokenString + ":" + hashedToken
-					} else {
-						tokenToStore = tokenString
-					}
-				default:
-					tokenToStore = tokenString
-				}
+	if err != nil {
+		mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrInvalidRefreshToken, c))
+		return
+	}
 
-				err = mw.Config.TokenStorage.StoreToken(tokenID, tokenToStore, expire)
-				if err != nil {
-					mw.unauthorized(c, http.StatusInternalServerError, mw.HTTPStatusMessageFunc(err, c))
-					return
-				}
-				c.Set("token_id", tokenID)
-				c.Set("token_storage_mode", mw.Config.TokenStorageMode)
-			}
+	claims, ok := token.Claims.(*core.RefreshTokenClaims)
+	if !ok {
+		mw.unauthorized(c, http.StatusUnauthorized, "Invalid refresh token claims")
+		return
+	}
+
+	// Check if refresh token is expired
+	if mw.Config.TimeFunc().Unix() > claims.ExpiresAt.Unix() {
+		mw.unauthorized(c, http.StatusUnauthorized, "Refresh token is expired")
+		return
+	}
+
+	// Validate token type
+	if claims.TokenType != "refresh" {
+		mw.unauthorized(c, http.StatusUnauthorized, "Invalid token type")
+		return
+	}
+
+	// Validate refresh token in storage
+	if mw.Config.TokenStorage != nil {
+		if valid, err := mw.Config.TokenStorage.IsRefreshTokenValid(claims.SessionID); err != nil || !valid {
+			mw.unauthorized(c, http.StatusUnauthorized, "Refresh token not found or invalid")
+			return
 		}
 	}
 
-	if mw.Config.SendCookie {
-		c.SetCookie(
-			mw.Config.CookieName,
-			tokenString,
-			mw.Config.CookieMaxAge,
-			"/",
-			mw.Config.CookieDomain,
-			false,
-			mw.Config.CookieHTTPOnly,
-		)
+	// Get user information
+	var user *core.User
+	if mw.Config.UserProvider != nil {
+		user, err = mw.Config.UserProvider.GetUserByID(claims.UserID)
+		if err != nil {
+			mw.unauthorized(c, http.StatusUnauthorized, "User not found")
+			return
+		}
+
+		// Check if user is still active
+		if !user.IsActive {
+			mw.unauthorized(c, http.StatusUnauthorized, mw.HTTPStatusMessageFunc(ErrInactiveUser, c))
+			return
+		}
+	} else {
+		// Create user from claims if no user provider
+		user = &core.User{
+			ID:       claims.UserID,
+			Username: claims.Username,
+			Email:    claims.Email,
+			Role:     claims.Role,
+			IsActive: true,
+		}
 	}
 
-	mw.Config.RefreshResponse(c, http.StatusOK, tokenString, expire)
+	// Generate new token pair
+	newTokenPair, err := mw.generateTokenPair(user, claims.SessionID)
+	if err != nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "Failed to generate new tokens")
+		return
+	}
+
+	// Update token pair in storage
+	if mw.Config.TokenStorage != nil {
+		err = mw.Config.TokenStorage.RefreshTokenPair(
+			claims.SessionID,
+			newTokenPair.AccessToken,
+			newTokenPair.RefreshToken,
+			newTokenPair.AccessTokenExpiresAt,
+			newTokenPair.RefreshTokenExpiresAt,
+		)
+		if err != nil {
+			mw.unauthorized(c, http.StatusInternalServerError, "Failed to update tokens")
+			return
+		}
+
+		// Update session activity
+		mw.Config.TokenStorage.UpdateSessionActivity(claims.SessionID, mw.Config.TimeFunc())
+	}
+
+	// Set new cookies if enabled
+	if mw.Config.SendCookie {
+		mw.setCookies(c, newTokenPair)
+	}
+
+	mw.Config.RefreshResponse(c, http.StatusOK, *newTokenPair)
 }
 
-// RefreshToken refreshes the JWT token
-func (mw *GinAuthMiddleware) RefreshToken(c *gin.Context) (string, time.Time, error) {
-	token, err := mw.parseToken(c)
-	if err != nil {
-		return "", time.Time{}, err
+// GetUserSessionsHandler returns active sessions for the current user
+func (mw *EnhancedGinAuthMiddleware) GetUserSessionsHandler(c *gin.Context) {
+	userID := c.MustGet(mw.Config.IdentityKey).(int)
+	
+	if mw.Config.TokenStorage != nil {
+		sessions, err := mw.Config.TokenStorage.GetUserActiveSessions(userID)
+		if err != nil {
+			mw.unauthorized(c, http.StatusInternalServerError, "Failed to get user sessions")
+			return
+		}
+
+		var sessionDetails []gin.H
+		for _, sessionID := range sessions {
+			if session, err := mw.Config.TokenStorage.GetUserSession(sessionID); err == nil {
+				sessionDetails = append(sessionDetails, gin.H{
+					"session_id":    session.SessionID,
+					"created_at":    session.CreatedAt.Unix(),
+					"last_activity": session.LastActivity.Unix(),
+					"ip_address":    session.IPAddress,
+					"user_agent":    session.UserAgent,
+				})
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":  true,
+			"sessions": sessionDetails,
+		})
+		return
 	}
 
-	claims := token.Claims.(*Claims)
+	c.JSON(http.StatusOK, gin.H{
+		"success":  true,
+		"sessions": []gin.H{},
+	})
+}
 
-	origIat := claims.IssuedAt.Unix()
-	if origIat < mw.Config.TimeFunc().Add(-mw.Config.MaxRefresh).Unix() {
-		return "", time.Time{}, ErrExpiredToken
-	}
+// generateTokenPair creates both access and refresh tokens
+func (mw *EnhancedGinAuthMiddleware) generateTokenPair(user *core.User, sessionID string) (*core.TokenPair, error) {
+	now := mw.Config.TimeFunc()
+	accessExpire := now.Add(mw.Config.AccessTokenTimeout)
+	refreshExpire := now.Add(mw.Config.RefreshTokenTimeout)
 
-	// Create a new token with a new expiration time
-	newToken := jwt.NewWithClaims(jwt.SigningMethodHS256, &Claims{
-		UserID:   claims.UserID,
-		Username: claims.Username,
+	// Create access token
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, &core.Claims{
+		UserID:    user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		Role:      user.Role,
+		TokenType: "access",
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			IssuedAt:  jwt.NewNumericDate(mw.Config.TimeFunc()),
-			ExpiresAt: jwt.NewNumericDate(mw.Config.TimeFunc().Add(mw.Config.Timeout)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(accessExpire),
+			Subject:   fmt.Sprintf("%v", user.ID),
 		},
 	})
 
-	tokenString, err := newToken.SignedString([]byte(mw.Config.SecretKey))
+	accessTokenString, err := accessToken.SignedString([]byte(mw.Config.SecretKey))
 	if err != nil {
-		return "", time.Time{}, err
+		return nil, err
 	}
 
-	expire := mw.Config.TimeFunc().Add(mw.Config.Timeout)
-	return tokenString, expire, nil
+	// Create refresh token
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, &core.RefreshTokenClaims{
+		UserID:    user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		Role:      user.Role,
+		TokenType: "refresh",
+		SessionID: sessionID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(refreshExpire),
+			Subject:   fmt.Sprintf("%v", user.ID),
+		},
+	})
+
+	refreshTokenString, err := refreshToken.SignedString([]byte(mw.Config.RefreshSecretKey))
+	if err != nil {
+		return nil, err
+	}
+
+	return &core.TokenPair{
+		AccessToken:           accessTokenString,
+		RefreshToken:          refreshTokenString,
+		AccessTokenExpiresAt:  accessExpire,
+		RefreshTokenExpiresAt: refreshExpire,
+		TokenType:             "Bearer",
+	}, nil
 }
 
-// GetClaimsFunc returns the function to extract claims from user data
-func (mw *GinAuthMiddleware) GetClaimsFunc() func(interface{}) *Claims {
-	return func(data interface{}) *Claims {
-		claims := &Claims{
-			RegisteredClaims: jwt.RegisteredClaims{
-				IssuedAt:  jwt.NewNumericDate(mw.Config.TimeFunc()),
-				ExpiresAt: jwt.NewNumericDate(mw.Config.TimeFunc().Add(mw.Config.Timeout)),
-			},
-		}
-
-		if mw.Config.PayloadFunc != nil {
-			payload := mw.Config.PayloadFunc(data)
-			if userID, ok := payload["user_id"]; ok {
-				claims.UserID = userID
-			}
-			if username, ok := payload["username"]; ok {
-				claims.Username = username.(string)
-			}
-		}
-
-		return claims
+// getRefreshToken extracts refresh token from request
+func (mw *EnhancedGinAuthMiddleware) getRefreshToken(c *gin.Context) string {
+	// Try to get from request body first
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
 	}
+	if err := c.ShouldBindJSON(&req); err == nil && req.RefreshToken != "" {
+		return req.RefreshToken
+	}
+
+	// Try to get from cookie
+	if cookie, err := c.Cookie(mw.Config.RefreshCookieName); err == nil && cookie != "" {
+		return cookie
+	}
+
+	// Try to get from header
+	if token := c.GetHeader("X-Refresh-Token"); token != "" {
+		return token
+	}
+
+	return ""
+}
+
+// setCookies sets both access and refresh token cookies
+func (mw *EnhancedGinAuthMiddleware) setCookies(c *gin.Context, tokenPair *core.TokenPair) {
+	// Set access token cookie (shorter expiry)
+	c.SetCookie(
+		mw.Config.CookieName,
+		tokenPair.AccessToken,
+		int(mw.Config.AccessTokenTimeout.Seconds()),
+		"/",
+		mw.Config.CookieDomain,
+		mw.Config.CookieSecure,
+		mw.Config.CookieHTTPOnly,
+	)
+
+	// Set refresh token cookie (longer expiry)
+	c.SetCookie(
+		mw.Config.RefreshCookieName,
+		tokenPair.RefreshToken,
+		int(mw.Config.RefreshTokenTimeout.Seconds()),
+		"/",
+		mw.Config.CookieDomain,
+		mw.Config.CookieSecure,
+		mw.Config.CookieHTTPOnly,
+	)
+}
+
+// clearCookies clears both access and refresh token cookies
+func (mw *EnhancedGinAuthMiddleware) clearCookies(c *gin.Context) {
+	c.SetCookie(
+		mw.Config.CookieName,
+		"",
+		-1,
+		"/",
+		mw.Config.CookieDomain,
+		mw.Config.CookieSecure,
+		mw.Config.CookieHTTPOnly,
+	)
+
+	c.SetCookie(
+		mw.Config.RefreshCookieName,
+		"",
+		-1,
+		"/",
+		mw.Config.CookieDomain,
+		mw.Config.CookieSecure,
+		mw.Config.CookieHTTPOnly,
+	)
 }
 
 // unauthorized handles unauthorized requests
-func (mw *GinAuthMiddleware) unauthorized(c *gin.Context, code int, message string) {
+func (mw *EnhancedGinAuthMiddleware) unauthorized(c *gin.Context, code int, message string) {
 	c.Header("WWW-Authenticate", "JWT realm="+mw.Config.Realm)
 	c.Abort()
 	mw.Config.Unauthorized(c, code, message)
 }
 
 // HTTPStatusMessageFunc returns HTTP status message based on error
-func (mw *GinAuthMiddleware) HTTPStatusMessageFunc(err error, c *gin.Context) string {
+func (mw *EnhancedGinAuthMiddleware) HTTPStatusMessageFunc(err error, c *gin.Context) string {
 	switch err {
 	case ErrEmptyAuthorizationHeader:
 		return "Authorization header is required"
@@ -585,18 +690,13 @@ func (mw *GinAuthMiddleware) HTTPStatusMessageFunc(err error, c *gin.Context) st
 		return "Missing authenticator function"
 	case ErrForbidden:
 		return "You don't have permission to access this resource"
+	case ErrInvalidRefreshToken:
+		return "Invalid refresh token"
+	case ErrInactiveUser:
+		return "User account is inactive"
+	case ErrSessionNotFound:
+		return "Session not found"
 	default:
 		return err.Error()
 	}
-}
-
-// generateTokenID creates a simple token ID from user data
-// In production, you might want to use a proper UUID library
-func generateTokenID(data interface{}) string {
-	if userData, ok := data.(map[string]interface{}); ok {
-		if userID, exists := userData["user_id"]; exists {
-			return fmt.Sprintf("token_%v_%d", userID, time.Now().Unix())
-		}
-	}
-	return fmt.Sprintf("token_%d", time.Now().UnixNano())
 }
