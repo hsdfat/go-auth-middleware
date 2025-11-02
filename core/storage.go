@@ -24,7 +24,7 @@ func (p *MapUserProvider) GetUserByUsername(username string) (*User, error) {
 }
 
 // GetUserByID implements UserProvider interface
-func (p *MapUserProvider) GetUserByID(userID int) (*User, error) {
+func (p *MapUserProvider) GetUserByID(userID string) (*User, error) {
 	for _, user := range p.users {
 		if user.ID == userID {
 			return &user, nil
@@ -44,7 +44,7 @@ func (p *MapUserProvider) GetUserByEmail(email string) (*User, error) {
 }
 
 // UpdateUserLastLogin implements UserProvider interface
-func (p *MapUserProvider) UpdateUserLastLogin(userID int, lastLogin time.Time) error {
+func (p *MapUserProvider) UpdateUserLastLogin(userID string, lastLogin time.Time) error {
 	for username, user := range p.users {
 		if user.ID == userID {
 			user.UpdatedAt = lastLogin
@@ -56,7 +56,7 @@ func (p *MapUserProvider) UpdateUserLastLogin(userID int, lastLogin time.Time) e
 }
 
 // IsUserActive implements UserProvider interface
-func (p *MapUserProvider) IsUserActive(userID int) (bool, error) {
+func (p *MapUserProvider) IsUserActive(userID string) (bool, error) {
 	fmt.Println("Checking if user is active:", userID)
 	for _, user := range p.users {
 		fmt.Println("User ID:", user.ID, user.IsActive)
@@ -71,7 +71,7 @@ func (p *MapUserProvider) IsUserActive(userID int) (bool, error) {
 type EnhancedInMemoryTokenStorage struct {
 	tokens        map[string]tokenData
 	refreshTokens map[string]tokenData
-	userSessions  map[interface{}][]string
+	userSessions  map[string][]string
 	sessions      map[string]UserSession
 	mutex         sync.RWMutex
 }
@@ -81,13 +81,13 @@ func NewEnhancedInMemoryTokenStorage() *EnhancedInMemoryTokenStorage {
 	return &EnhancedInMemoryTokenStorage{
 		tokens:        make(map[string]tokenData),
 		refreshTokens: make(map[string]tokenData),
-		userSessions:  make(map[interface{}][]string),
+		userSessions:  make(map[string][]string),
 		sessions:      make(map[string]UserSession),
 	}
 }
 
 // StoreTokenPair implements TokenStorage interface
-func (s *EnhancedInMemoryTokenStorage) StoreTokenPair(sessionID string, accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, userID int) error {
+func (s *EnhancedInMemoryTokenStorage) StoreTokenPair(sessionID string, accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, userID string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -173,7 +173,7 @@ func (s *EnhancedInMemoryTokenStorage) DeleteTokenPair(sessionID string) error {
 	defer s.mutex.Unlock()
 
 	// Get user ID before deletion for session cleanup
-	var userID int
+	var userID string
 	if data, exists := s.tokens[sessionID]; exists {
 		userID = data.userID
 	}
@@ -183,7 +183,7 @@ func (s *EnhancedInMemoryTokenStorage) DeleteTokenPair(sessionID string) error {
 	delete(s.refreshTokens, sessionID)
 
 	// Remove from user sessions
-	if userID != -1 {
+	if userID != "" {
 		if sessions, exists := s.userSessions[userID]; exists {
 			var updatedSessions []string
 			for _, sid := range sessions {
@@ -232,7 +232,7 @@ func (s *EnhancedInMemoryTokenStorage) RefreshTokenPair(sessionID string, newAcc
 }
 
 // RevokeAllUserTokens implements TokenStorage interface
-func (s *EnhancedInMemoryTokenStorage) RevokeAllUserTokens(userID int) error {
+func (s *EnhancedInMemoryTokenStorage) RevokeAllUserTokens(userID string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -257,7 +257,7 @@ func (s *EnhancedInMemoryTokenStorage) RevokeAllUserTokens(userID int) error {
 }
 
 // GetUserActiveSessions implements TokenStorage interface
-func (s *EnhancedInMemoryTokenStorage) GetUserActiveSessions(userID int) ([]string, error) {
+func (s *EnhancedInMemoryTokenStorage) GetUserActiveSessions(userID string) ([]string, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -321,7 +321,7 @@ func (s *EnhancedInMemoryTokenStorage) CleanupExpiredTokens() error {
 	defer s.mutex.Unlock()
 
 	now := time.Now()
-	
+
 	// Clean up expired access tokens
 	for sessionID, data := range s.tokens {
 		if now.After(data.expiresAt) {

@@ -167,7 +167,7 @@ func createEnhancedUsers() (map[string]core.User, error) {
 		return nil, err
 	}
 	users["admin"] = core.User{
-		ID:           1,
+		ID:           "1",
 		Username:     "admin",
 		Email:        "admin@example.com",
 		Role:         "admin",
@@ -183,7 +183,7 @@ func createEnhancedUsers() (map[string]core.User, error) {
 		return nil, err
 	}
 	users["user"] = core.User{
-		ID:           2,
+		ID:           "2",
 		Username:     "user",
 		Email:        "user@example.com",
 		Role:         "user",
@@ -199,7 +199,7 @@ func createEnhancedUsers() (map[string]core.User, error) {
 		return nil, err
 	}
 	users["mod"] = core.User{
-		ID:           3,
+		ID:           "3",
 		Username:     "mod",
 		Email:        "mod@example.com",
 		Role:         "moderator",

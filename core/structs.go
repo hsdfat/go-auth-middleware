@@ -8,13 +8,13 @@ import (
 
 // User represents a user for authentication with enhanced fields
 type User struct {
-	ID           int    `json:"id"`
-	Username     string `json:"username"`
-	Password     string `json:"-"`
-	Email        string `json:"email"`
-	Role         string `json:"role"`
-	PasswordHash string `json:"-"`
-	IsActive     bool   `json:"is_active"`
+	ID           string    `json:"id"`
+	Username     string    `json:"username"`
+	Password     string    `json:"-"`
+	Email        string    `json:"email"`
+	Role         string    `json:"role"`
+	PasswordHash string    `json:"-"`
+	IsActive     bool      `json:"is_active"`
 	CreatedAt    time.Time `json:"created_at,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }
@@ -29,13 +29,13 @@ type DatabaseUserProvider struct {
 
 // TokenData holds token information with refresh token support
 type tokenData struct {
-	accessToken  string
-	refreshToken string
-	expiresAt    time.Time
+	accessToken      string
+	refreshToken     string
+	expiresAt        time.Time
 	refreshExpiresAt time.Time
-	userID       int
-	isRevoked    bool
-	tokenType    string // "access" or "refresh"
+	userID           string
+	isRevoked        bool
+	tokenType        string // "access" or "refresh"
 }
 
 type InMemoryTokenStorage struct {
@@ -43,28 +43,28 @@ type InMemoryTokenStorage struct {
 	// Track refresh tokens separately for better management
 	refreshTokens map[string]tokenData
 	// Track user sessions for logout all functionality
-	userSessions map[interface{}][]string
+	userSessions map[string][]string
 }
 
 // Claims represents JWT claims with enhanced user information
 type Claims struct {
-	UserID   int `json:"user_id"`
-	Username string      `json:"username"`
-	Email    string      `json:"email"`
-	Role     string      `json:"role"`
-	TokenType string     `json:"token_type"` // "access" or "refresh"
-	SessionID string     `json:"session_id"` // For tracking user sessions
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	Email     string `json:"email"`
+	Role      string `json:"role"`
+	TokenType string `json:"token_type"` // "access" or "refresh"
+	SessionID string `json:"session_id"` // For tracking user sessions
 	jwt.RegisteredClaims
 }
 
 // RefreshTokenClaims represents refresh token specific claims
 type RefreshTokenClaims struct {
-	UserID    int `json:"user_id"`
-	Username  string      `json:"username"`
-	Email     string      `json:"email"`
-	Role      string      `json:"role"`
-	SessionID string      `json:"session_id"`
-	TokenType string      `json:"token_type"` // Always "refresh"
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	Email     string `json:"email"`
+	Role      string `json:"role"`
+	SessionID string `json:"session_id"`
+	TokenType string `json:"token_type"` // Always "refresh"
 	jwt.RegisteredClaims
 }
 
@@ -79,13 +79,13 @@ type TokenPair struct {
 
 // UserSession represents an active user session
 type UserSession struct {
-	SessionID    string      `json:"session_id"`
-	UserID       int `json:"user_id"`
-	Username     string      `json:"username"`
-	Email        string      `json:"email"`
-	Role         string      `json:"role"`
-	CreatedAt    time.Time   `json:"created_at"`
-	LastActivity time.Time   `json:"last_activity"`
-	IPAddress    string      `json:"ip_address,omitempty"`
-	UserAgent    string      `json:"user_agent,omitempty"`
+	SessionID    string    `json:"session_id"`
+	UserID       string    `json:"user_id"`
+	Username     string    `json:"username"`
+	Email        string    `json:"email"`
+	Role         string    `json:"role"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastActivity time.Time `json:"last_activity"`
+	IPAddress    string    `json:"ip_address,omitempty"`
+	UserAgent    string    `json:"user_agent,omitempty"`
 }

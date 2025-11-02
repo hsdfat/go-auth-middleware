@@ -5,7 +5,7 @@ import "time"
 // Enhanced TokenStorage interface for refresh token support
 type TokenStorage interface {
 	// Access token methods
-	StoreTokenPair(sessionID string, accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, userID int) error
+	StoreTokenPair(sessionID string, accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, userID string) error
 	GetAccessToken(sessionID string) (string, error)
 	GetRefreshToken(sessionID string) (string, error)
 	
@@ -18,8 +18,8 @@ type TokenStorage interface {
 	RefreshTokenPair(sessionID string, newAccessToken, newRefreshToken string, accessExpiresAt, refreshExpiresAt time.Time) error
 	
 	// User session management
-	RevokeAllUserTokens(userID int) error
-	GetUserActiveSessions(userID int) ([]string, error)
+	RevokeAllUserTokens(userID string) error
+	GetUserActiveSessions(userID string) ([]string, error)
 	
 	// Session tracking
 	StoreUserSession(session UserSession) error
@@ -34,27 +34,27 @@ type TokenStorage interface {
 // Enhanced UserProvider interface
 type UserProvider interface {
 	GetUserByUsername(username string) (*User, error)
-	GetUserByID(userID int) (*User, error)
+	GetUserByID(userID string) (*User, error)
 	GetUserByEmail(email string) (*User, error)
-	UpdateUserLastLogin(userID int, lastLogin time.Time) error
-	IsUserActive(userID int) (bool, error)
+	UpdateUserLastLogin(userID string, lastLogin time.Time) error
+	IsUserActive(userID string) (bool, error)
 }
 
 // Role-based access control interface
 type RoleProvider interface {
-	GetUserRoles(userID int) ([]string, error)
-	HasRole(userID int, role string) (bool, error)
-	HasPermission(userID int, permission string) (bool, error)
+	GetUserRoles(userID string) ([]string, error)
+	HasRole(userID string, role string) (bool, error)
+	HasPermission(userID string, permission string) (bool, error)
 	GetRolePermissions(role string) ([]string, error)
 }
 
 // Session management interface
 type SessionManager interface {
-	CreateSession(userID int, ipAddress, userAgent string) (*UserSession, error)
+	CreateSession(userID string, ipAddress, userAgent string) (*UserSession, error)
 	GetSession(sessionID string) (*UserSession, error)
 	UpdateSession(sessionID string, lastActivity time.Time) error
 	RevokeSession(sessionID string) error
-	RevokeAllUserSessions(userID int) error
-	GetUserActiveSessions(userID int) ([]*UserSession, error)
+	RevokeAllUserSessions(userID string) error
+	GetUserActiveSessions(userID string) ([]*UserSession, error)
 	CleanupExpiredSessions() error
 }

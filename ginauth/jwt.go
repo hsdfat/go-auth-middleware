@@ -382,7 +382,7 @@ func (mw *EnhancedGinAuthMiddleware) LogoutHandler(c *gin.Context) {
 
 // LogoutAllHandler handles logout from all devices
 func (mw *EnhancedGinAuthMiddleware) LogoutAllHandler(c *gin.Context) {
-	userID := c.MustGet(mw.Config.IdentityKey).(int)
+	userID := c.MustGet(mw.Config.IdentityKey).(string)
 	
 	// Revoke all user tokens
 	if mw.Config.TokenStorage != nil {
@@ -509,7 +509,7 @@ func (mw *EnhancedGinAuthMiddleware) RefreshHandler(c *gin.Context) {
 
 // GetUserSessionsHandler returns active sessions for the current user
 func (mw *EnhancedGinAuthMiddleware) GetUserSessionsHandler(c *gin.Context) {
-	userID := c.MustGet(mw.Config.IdentityKey).(int)
+	userID := c.MustGet(mw.Config.IdentityKey).(string)
 	
 	if mw.Config.TokenStorage != nil {
 		sessions, err := mw.Config.TokenStorage.GetUserActiveSessions(userID)

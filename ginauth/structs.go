@@ -234,7 +234,7 @@ func CreatePermissionAuthorizator(roleProvider core.RoleProvider, requiredPermis
 			return true
 		}
 		
-		userID := c.MustGet("identity").(int)
+		userID := c.MustGet("identity").(string)
 		hasPermission, err := roleProvider.HasPermission(userID, requiredPermission)
 		if err != nil {
 			return false
