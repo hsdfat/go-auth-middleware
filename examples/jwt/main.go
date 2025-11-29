@@ -29,14 +29,14 @@ func main() {
 	authMiddleware := ginauth.NewEnhanced(ginauth.EnhancedAuthConfig{
 		SecretKey:           "your-access-token-secret-key",
 		RefreshSecretKey:    "your-refresh-token-secret-key", // Should be different
-		AccessTokenTimeout:  15 * time.Minute,               // Short-lived access tokens
-		RefreshTokenTimeout: 7 * 24 * time.Hour,             // 7 days refresh tokens
-		
+		AccessTokenTimeout:  15 * time.Minute,                // Short-lived access tokens
+		RefreshTokenTimeout: 7 * 24 * time.Hour,              // 7 days refresh tokens
+
 		TokenLookup:   "header:Authorization,cookie:jwt",
 		TokenHeadName: "Bearer",
 		Realm:         "enhanced-auth",
 		IdentityKey:   "identity",
-		
+
 		// Cookie configuration
 		SendCookie:        true,
 		CookieName:        "access_token",
@@ -44,28 +44,35 @@ func main() {
 		CookieHTTPOnly:    true,
 		CookieSecure:      false, // Set to true in production with HTTPS
 		CookieDomain:      "",
-		
+
 		// Storage and providers
 		TokenStorage: tokenStorage,
 		UserProvider: userProvider,
-		
+		UserCreator:  userProvider, // MapUserProvider implements both UserProvider and UserCreator
+
 		// Authentication function
 		Authenticator: ginauth.CreateEnhancedAuthenticator(userProvider),
-		
+
 		// Role-based authorization (example: only admin and user roles allowed)
 		RoleAuthorizator: ginauth.CreateRoleAuthorizator("admin", "user", "moderator"),
-		
+
+		// Registration configuration
+		EnableRegistration: true,             // Enable user registration
+		RegisterableRoles:  []string{"user"}, // Only "user" role can be registered
+		DefaultRole:        "user",           // New users get "user" role by default
+
 		// Security settings
-		MaxConcurrentSessions: 5,    // Max 5 concurrent sessions per user
-		SingleSessionMode:     false, // Allow multiple sessions
-		EnableTokenRevocation: true,  // Enable token revocation on logout
+		MaxConcurrentSessions: 5,         // Max 5 concurrent sessions per user
+		SingleSessionMode:     false,     // Allow multiple sessions
+		EnableTokenRevocation: true,      // Enable token revocation on logout
 		CleanupInterval:       time.Hour, // Cleanup expired tokens every hour
 	})
 
 	// Public routes
 	r.POST("/auth/login", authMiddleware.LoginHandler)
+	r.POST("/auth/register", authMiddleware.RegisterHandler)
 	r.POST("/auth/refresh", authMiddleware.RefreshHandler)
-	
+
 	// Routes that require authentication
 	authenticated := r.Group("/auth")
 	authenticated.Use(authMiddleware.MiddlewareFunc())
@@ -86,7 +93,7 @@ func main() {
 			userRole := c.MustGet("user_role")
 			username := c.MustGet("username")
 			sessionID := c.MustGet("SESSION_ID")
-			
+
 			c.JSON(http.StatusOK, gin.H{
 				"success": true,
 				"data": gin.H{
@@ -98,7 +105,7 @@ func main() {
 				},
 			})
 		})
-		
+
 		// Admin only routes
 		admin := api.Group("/admin")
 		admin.Use(requireRole("admin"))
@@ -108,7 +115,7 @@ func main() {
 			admin.PUT("/users/:id", updateUserHandler)
 			admin.DELETE("/users/:id", deleteUserHandler)
 		}
-		
+
 		// Moderator and Admin routes
 		moderation := api.Group("/moderation")
 		moderation.Use(requireRoles("admin", "moderator"))
@@ -130,7 +137,7 @@ func main() {
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
-		
+
 		for range ticker.C {
 			if err := tokenStorage.CleanupExpiredTokens(); err != nil {
 				log.Printf("Failed to cleanup expired tokens: %v", err)
@@ -141,6 +148,7 @@ func main() {
 	log.Println("Enhanced JWT Auth server starting on :8080")
 	log.Println("Available endpoints:")
 	log.Println("  POST /auth/login     - User login")
+	log.Println("  POST /auth/register  - Register new user")
 	log.Println("  POST /auth/refresh   - Refresh access token")
 	log.Println("  POST /auth/logout    - Logout current session")
 	log.Println("  POST /auth/logout-all - Logout all sessions")
@@ -153,14 +161,24 @@ func main() {
 	log.Println("  Admin: username=admin, password=admin123, email=admin@example.com")
 	log.Println("  User:  username=user, password=user123, email=user@example.com")
 	log.Println("  Mod:   username=mod, password=mod123, email=mod@example.com")
-	
+	log.Println("")
+	log.Println("Registration:")
+	log.Println("  Only 'user' role can be registered (admin/moderator roles need to be created by admins)")
+	log.Println("  Example request:")
+	log.Println("  POST /auth/register")
+	log.Println("  {")
+	log.Println("    \"username\": \"newuser\",")
+	log.Println("    \"email\": \"newuser@example.com\",")
+	log.Println("    \"password\": \"securepass123\"")
+	log.Println("  }")
+
 	log.Fatal(r.Run(":8080"))
 }
 
 // createEnhancedUsers creates sample users with enhanced fields
 func createEnhancedUsers() (map[string]core.User, error) {
 	users := make(map[string]core.User)
-	
+
 	// Admin user
 	adminHash, err := ginauth.HashPassword("admin123")
 	if err != nil {
@@ -176,7 +194,7 @@ func createEnhancedUsers() (map[string]core.User, error) {
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
-	
+
 	// Regular user
 	userHash, err := ginauth.HashPassword("user123")
 	if err != nil {
@@ -192,7 +210,7 @@ func createEnhancedUsers() (map[string]core.User, error) {
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
-	
+
 	// Moderator user
 	modHash, err := ginauth.HashPassword("mod123")
 	if err != nil {
@@ -208,7 +226,7 @@ func createEnhancedUsers() (map[string]core.User, error) {
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}
-	
+
 	return users, nil
 }
 
@@ -225,7 +243,7 @@ func requireRole(requiredRole string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		
+
 		if userRole.(string) != requiredRole {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -235,7 +253,7 @@ func requireRole(requiredRole string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		
+
 		c.Next()
 	}
 }
@@ -253,7 +271,7 @@ func requireRoles(allowedRoles ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		
+
 		userRoleStr := userRole.(string)
 		allowed := false
 		for _, role := range allowedRoles {
@@ -262,7 +280,7 @@ func requireRoles(allowedRoles ...string) gin.HandlerFunc {
 				break
 			}
 		}
-		
+
 		if !allowed {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -272,7 +290,7 @@ func requireRoles(allowedRoles ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		
+
 		c.Next()
 	}
 }
@@ -298,7 +316,7 @@ func createUserHandler(c *gin.Context) {
 		Role     string `json:"role" binding:"required"`
 		Password string `json:"password" binding:"required,min=6"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -308,7 +326,7 @@ func createUserHandler(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusCreated, gin.H{
 		"success": true,
 		"message": "User created successfully",
@@ -323,14 +341,14 @@ func createUserHandler(c *gin.Context) {
 
 func updateUserHandler(c *gin.Context) {
 	userID := c.Param("id")
-	
+
 	var req struct {
 		Username string `json:"username,omitempty"`
 		Email    string `json:"email,omitempty"`
 		Role     string `json:"role,omitempty"`
 		IsActive *bool  `json:"is_active,omitempty"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -340,7 +358,7 @@ func updateUserHandler(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "User updated successfully",
@@ -353,7 +371,7 @@ func updateUserHandler(c *gin.Context) {
 
 func deleteUserHandler(c *gin.Context) {
 	userID := c.Param("id")
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "User deleted successfully",
@@ -384,7 +402,7 @@ func getReportsHandler(c *gin.Context) {
 					"reported_by": 1,
 					"reason":      "inappropriate",
 					"status":      "reviewed",
-					"created_at":  time.Now().Add(-2*time.Hour).Unix(),
+					"created_at":  time.Now().Add(-2 * time.Hour).Unix(),
 				},
 			},
 		},
@@ -393,12 +411,12 @@ func getReportsHandler(c *gin.Context) {
 
 func moderateContentHandler(c *gin.Context) {
 	contentID := c.Param("id")
-	
+
 	var req struct {
 		Action string `json:"action" binding:"required,oneof=approve reject"`
 		Reason string `json:"reason,omitempty"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -408,18 +426,18 @@ func moderateContentHandler(c *gin.Context) {
 		})
 		return
 	}
-	
+
 	moderatorID := c.MustGet("identity")
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Content moderated successfully",
 		"data": gin.H{
-			"content_id":    contentID,
-			"action":        req.Action,
-			"reason":        req.Reason,
-			"moderated_by":  moderatorID,
-			"moderated_at":  time.Now().Unix(),
+			"content_id":   contentID,
+			"action":       req.Action,
+			"reason":       req.Reason,
+			"moderated_by": moderatorID,
+			"moderated_at": time.Now().Unix(),
 		},
 	})
 }

@@ -11,66 +11,74 @@ import (
 
 var (
 	CheckPasswordHash = core.CheckPasswordHash
-	HashPassword	  = core.HashPassword
+	HashPassword      = core.HashPassword
 )
+
 // EnhancedAuthConfig holds enhanced configuration for the authentication middleware
 type EnhancedAuthConfig struct {
 	// JWT Configuration
-	SecretKey           string // Secret key for access tokens
-	RefreshSecretKey    string // Secret key for refresh tokens (should be different)
+	SecretKey           string        // Secret key for access tokens
+	RefreshSecretKey    string        // Secret key for refresh tokens (should be different)
 	AccessTokenTimeout  time.Duration // Access token expiry (e.g., 15 minutes)
 	RefreshTokenTimeout time.Duration // Refresh token expiry (e.g., 7 days)
-	
+
 	// Token Lookup Configuration
 	TokenLookup   string // Token lookup method: "header:Authorization,query:token,cookie:jwt"
 	TokenHeadName string // Token header name: "Bearer"
-	
+
 	// General Configuration
-	Realm       string // Realm name
-	IdentityKey string // Identity key for context
+	Realm       string           // Realm name
+	IdentityKey string           // Identity key for context
 	TimeFunc    func() time.Time // Time function for testing
-	
+
 	// Cookie Configuration
-	SendCookie        bool   // Whether to send cookies
-	CookieName        string // Access token cookie name
-	RefreshCookieName string // Refresh token cookie name
-	CookieMaxAge      int    // Cookie max age in seconds
-	CookieDomain      string // Cookie domain
-	CookieSecure      bool   // Cookie secure flag
-	CookieHTTPOnly    bool   // Cookie HTTP only flag
+	SendCookie        bool          // Whether to send cookies
+	CookieName        string        // Access token cookie name
+	RefreshCookieName string        // Refresh token cookie name
+	CookieMaxAge      int           // Cookie max age in seconds
+	CookieDomain      string        // Cookie domain
+	CookieSecure      bool          // Cookie secure flag
+	CookieHTTPOnly    bool          // Cookie HTTP only flag
 	CookieSameSite    http.SameSite // Cookie SameSite attribute
-	
+
 	// Storage and Providers
 	TokenStorage   core.TokenStorage   // Token storage interface
 	UserProvider   core.UserProvider   // User provider interface
+	UserCreator    core.UserCreator    // User creator interface for registration
 	RoleProvider   core.RoleProvider   // Role provider interface (optional)
 	SessionManager core.SessionManager // Session manager interface (optional)
-	
+
+	// Registration Configuration
+	EnableRegistration bool     // Enable user registration endpoint
+	RegisterableRoles  []string // Roles that can be assigned during registration (empty = default "user" role only)
+	DefaultRole        string   // Default role for new users (default: "user")
+
 	// Authentication and Authorization Functions
-	Authenticator     func(c *gin.Context) (*core.User, error)
-	Authorizator      func(data interface{}, c *gin.Context) bool
-	RoleAuthorizator  func(role string, c *gin.Context) bool // Role-based authorization
-	IdentityHandler   func(c *gin.Context) interface{}
-	
+	Authenticator    func(c *gin.Context) (*core.User, error)
+	Authorizator     func(data interface{}, c *gin.Context) bool
+	RoleAuthorizator func(role string, c *gin.Context) bool // Role-based authorization
+	IdentityHandler  func(c *gin.Context) interface{}
+
 	// Response Functions
-	Unauthorized    func(c *gin.Context, code int, message string)
-	LoginResponse   func(c *gin.Context, code int, tokenPair core.TokenPair, user *core.User)
-	LogoutResponse  func(c *gin.Context, code int, message string)
-	RefreshResponse func(c *gin.Context, code int, tokenPair core.TokenPair)
-	
+	Unauthorized     func(c *gin.Context, code int, message string)
+	LoginResponse    func(c *gin.Context, code int, tokenPair core.TokenPair, user *core.User)
+	LogoutResponse   func(c *gin.Context, code int, message string)
+	RefreshResponse  func(c *gin.Context, code int, tokenPair core.TokenPair)
+	RegisterResponse func(c *gin.Context, code int, user *core.User)
+
 	// Security Configuration
 	EnableBruteForceProtection bool          // Enable brute force protection
-	MaxLoginAttempts          int           // Max login attempts before lockout
-	LockoutDuration           time.Duration // Lockout duration
-	RequireEmailVerification  bool          // Require email verification
-	EnableTwoFactor           bool          // Enable two-factor authentication
-	
+	MaxLoginAttempts           int           // Max login attempts before lockout
+	LockoutDuration            time.Duration // Lockout duration
+	RequireEmailVerification   bool          // Require email verification
+	EnableTwoFactor            bool          // Enable two-factor authentication
+
 	// Session Configuration
 	MaxConcurrentSessions int  // Maximum concurrent sessions per user (0 = unlimited)
 	SingleSessionMode     bool // Only allow one session per user
-	
+
 	// Token Configuration
-	EnableTokenRevocation bool // Enable token revocation on logout
+	EnableTokenRevocation bool          // Enable token revocation on logout
 	CleanupInterval       time.Duration // Interval for cleaning up expired tokens
 }
 
@@ -92,6 +100,27 @@ type LogoutRequest struct {
 	LogoutAll bool `json:"logout_all,omitempty"` // Logout from all devices
 }
 
+// RegistrationRequest represents the user registration request structure
+type RegistrationRequest struct {
+	Username string `json:"username" binding:"required,min=3,max=50"`
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required,min=8"`
+	Role     string `json:"role,omitempty"` // Optional, defaults to "user" or as configured
+}
+
+// RegistrationResponse represents the response returned after successful registration
+type RegistrationResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Data    struct {
+		UserID    string `json:"user_id"`
+		Username  string `json:"username"`
+		Email     string `json:"email"`
+		Role      string `json:"role"`
+		CreatedAt int64  `json:"created_at"`
+	} `json:"data"`
+}
+
 // Enhanced response structures
 
 // LoginResponse represents the response returned after a successful login
@@ -111,11 +140,11 @@ type EnhancedLoginResponse struct {
 			Role     string      `json:"role"`
 		} `json:"user"`
 		SessionInfo struct {
-			SessionID    string `json:"session_id"`
-			CreatedAt    int64  `json:"created_at"`
-			ExpiresAt    int64  `json:"expires_at"`
-			IPAddress    string `json:"ip_address,omitempty"`
-			UserAgent    string `json:"user_agent,omitempty"`
+			SessionID string `json:"session_id"`
+			CreatedAt int64  `json:"created_at"`
+			ExpiresAt int64  `json:"expires_at"`
+			IPAddress string `json:"ip_address,omitempty"`
+			UserAgent string `json:"user_agent,omitempty"`
 		} `json:"session_info,omitempty"`
 	} `json:"data"`
 }
@@ -180,13 +209,13 @@ func CreateEnhancedAuthenticator(userProvider core.UserProvider) func(*gin.Conte
 		// Try to get user by username or email
 		var user *core.User
 		var err error
-		
+
 		if loginRequest.Email != "" {
 			user, err = userProvider.GetUserByEmail(loginRequest.Email)
 		} else {
 			user, err = userProvider.GetUserByUsername(loginRequest.Username)
 		}
-		
+
 		if err != nil {
 			return nil, errors.New("invalid credentials")
 		}
@@ -218,7 +247,7 @@ func CreateRoleAuthorizator(allowedRoles ...string) func(string, *gin.Context) b
 	for _, role := range allowedRoles {
 		roleMap[role] = true
 	}
-	
+
 	return func(userRole string, c *gin.Context) bool {
 		if len(roleMap) == 0 {
 			return true // No role restrictions
@@ -233,13 +262,13 @@ func CreatePermissionAuthorizator(roleProvider core.RoleProvider, requiredPermis
 		if roleProvider == nil {
 			return true
 		}
-		
+
 		userID := c.MustGet("identity").(string)
 		hasPermission, err := roleProvider.HasPermission(userID, requiredPermission)
 		if err != nil {
 			return false
 		}
-		
+
 		return hasPermission
 	}
 }

@@ -67,6 +67,68 @@ func (p *MapUserProvider) IsUserActive(userID string) (bool, error) {
 	return false, fmt.Errorf("user not found")
 }
 
+// CreateUser implements UserCreator interface
+func (p *MapUserProvider) CreateUser(user *User) error {
+	if user == nil {
+		return fmt.Errorf("user cannot be nil")
+	}
+	if user.Username == "" {
+		return fmt.Errorf("username is required")
+	}
+	if user.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Check if username already exists
+	if _, exists := p.users[user.Username]; exists {
+		return fmt.Errorf("username already exists")
+	}
+
+	// Check if email already exists
+	for _, u := range p.users {
+		if u.Email == user.Email {
+			return fmt.Errorf("email already exists")
+		}
+	}
+
+	// Add the new user
+	p.users[user.Username] = *user
+	return nil
+}
+
+// UserExists implements UserCreator interface
+func (p *MapUserProvider) UserExists(username string, email string) (bool, error) {
+	// Check username
+	if _, exists := p.users[username]; exists {
+		return true, nil
+	}
+
+	// Check email
+	for _, user := range p.users {
+		if user.Email == email {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// IsUsernameAvailable implements UserCreator interface
+func (p *MapUserProvider) IsUsernameAvailable(username string) (bool, error) {
+	_, exists := p.users[username]
+	return !exists, nil
+}
+
+// IsEmailAvailable implements UserCreator interface
+func (p *MapUserProvider) IsEmailAvailable(email string) (bool, error) {
+	for _, user := range p.users {
+		if user.Email == email {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // Enhanced InMemoryTokenStorage with refresh token support
 type EnhancedInMemoryTokenStorage struct {
 	tokens        map[string]tokenData

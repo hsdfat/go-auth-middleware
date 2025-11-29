@@ -85,11 +85,11 @@ func NewEnhanced(config EnhancedAuthConfig) *EnhancedGinAuthMiddleware {
 				"success": true,
 				"code":    code,
 				"data": gin.H{
-					"access_token":            tokenPair.AccessToken,
-					"refresh_token":           tokenPair.RefreshToken,
-					"access_token_expires_at": tokenPair.AccessTokenExpiresAt.Unix(),
+					"access_token":             tokenPair.AccessToken,
+					"refresh_token":            tokenPair.RefreshToken,
+					"access_token_expires_at":  tokenPair.AccessTokenExpiresAt.Unix(),
 					"refresh_token_expires_at": tokenPair.RefreshTokenExpiresAt.Unix(),
-					"token_type":              tokenPair.TokenType,
+					"token_type":               tokenPair.TokenType,
 					"user": gin.H{
 						"id":       user.ID,
 						"username": user.Username,
@@ -125,6 +125,28 @@ func NewEnhanced(config EnhancedAuthConfig) *EnhancedGinAuthMiddleware {
 				},
 			})
 		}
+	}
+
+	if config.RegisterResponse == nil {
+		config.RegisterResponse = func(c *gin.Context, code int, user *core.User) {
+			c.JSON(code, gin.H{
+				"success": true,
+				"code":    code,
+				"message": "User registered successfully",
+				"data": gin.H{
+					"user_id":    user.ID,
+					"username":   user.Username,
+					"email":      user.Email,
+					"role":       user.Role,
+					"created_at": user.CreatedAt.Unix(),
+				},
+			})
+		}
+	}
+
+	// Set default role for registrations
+	if config.DefaultRole == "" {
+		config.DefaultRole = "user"
 	}
 
 	return &EnhancedGinAuthMiddleware{
@@ -354,6 +376,115 @@ func (mw *EnhancedGinAuthMiddleware) LoginHandler(c *gin.Context) {
 	mw.Config.LoginResponse(c, http.StatusOK, *tokenPair, user)
 }
 
+// RegisterHandler handles user registration with role-based authorization
+func (mw *EnhancedGinAuthMiddleware) RegisterHandler(c *gin.Context) {
+	// Check if registration is enabled
+	if !mw.Config.EnableRegistration {
+		mw.unauthorized(c, http.StatusForbidden, "Registration is disabled")
+		return
+	}
+
+	// Check if UserCreator is configured
+	if mw.Config.UserCreator == nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "User creator not configured")
+		return
+	}
+
+	// Parse registration request
+	var regReq RegistrationRequest
+	if err := c.ShouldBindJSON(&regReq); err != nil {
+		mw.unauthorized(c, http.StatusBadRequest, "Invalid registration request: "+err.Error())
+		return
+	}
+
+	// Determine the role for the new user
+	userRole := mw.Config.DefaultRole
+	if regReq.Role != "" {
+		// If a role is requested, check if it's allowed
+		if !mw.isRoleRegisterable(regReq.Role) {
+			mw.unauthorized(c, http.StatusForbidden, fmt.Sprintf("Role '%s' cannot be assigned during registration", regReq.Role))
+			return
+		}
+		userRole = regReq.Role
+	}
+
+	// Check if username and email are available
+	if mw.Config.UserCreator != nil {
+		usernameAvailable, err := mw.Config.UserCreator.IsUsernameAvailable(regReq.Username)
+		if err != nil {
+			mw.unauthorized(c, http.StatusInternalServerError, "Failed to validate username")
+			return
+		}
+		if !usernameAvailable {
+			mw.unauthorized(c, http.StatusConflict, "Username already exists")
+			return
+		}
+
+		emailAvailable, err := mw.Config.UserCreator.IsEmailAvailable(regReq.Email)
+		if err != nil {
+			mw.unauthorized(c, http.StatusInternalServerError, "Failed to validate email")
+			return
+		}
+		if !emailAvailable {
+			mw.unauthorized(c, http.StatusConflict, "Email already registered")
+			return
+		}
+	}
+
+	// Hash the password
+	passwordHash, err := HashPassword(regReq.Password)
+	if err != nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "Failed to process password")
+		return
+	}
+
+	// Generate unique user ID
+	userID, err := core.GenerateSessionID() // Reuse session ID generator for unique IDs
+	if err != nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "Failed to generate user ID")
+		return
+	}
+
+	// Create new user
+	now := mw.Config.TimeFunc()
+	newUser := &core.User{
+		ID:           userID,
+		Username:     regReq.Username,
+		Email:        regReq.Email,
+		PasswordHash: passwordHash,
+		Role:         userRole,
+		IsActive:     true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	// Store user in user creator
+	if err := mw.Config.UserCreator.CreateUser(newUser); err != nil {
+		mw.unauthorized(c, http.StatusInternalServerError, "Failed to create user: "+err.Error())
+		return
+	}
+
+	// Call the registration response handler
+	mw.Config.RegisterResponse(c, http.StatusCreated, newUser)
+}
+
+// isRoleRegisterable checks if a role can be assigned during registration
+func (mw *EnhancedGinAuthMiddleware) isRoleRegisterable(role string) bool {
+	// If no registerable roles are specified, only allow the default role
+	if len(mw.Config.RegisterableRoles) == 0 {
+		return role == mw.Config.DefaultRole
+	}
+
+	// Check if role is in the registerable roles list
+	for _, allowedRole := range mw.Config.RegisterableRoles {
+		if allowedRole == role {
+			return true
+		}
+	}
+
+	return false
+}
+
 // LogoutHandler handles user logout with comprehensive cleanup
 func (mw *EnhancedGinAuthMiddleware) LogoutHandler(c *gin.Context) {
 	sessionID, exists := c.Get("SESSION_ID")
@@ -383,7 +514,7 @@ func (mw *EnhancedGinAuthMiddleware) LogoutHandler(c *gin.Context) {
 // LogoutAllHandler handles logout from all devices
 func (mw *EnhancedGinAuthMiddleware) LogoutAllHandler(c *gin.Context) {
 	userID := c.MustGet(mw.Config.IdentityKey).(string)
-	
+
 	// Revoke all user tokens
 	if mw.Config.TokenStorage != nil {
 		err := mw.Config.TokenStorage.RevokeAllUserTokens(userID)
@@ -510,7 +641,7 @@ func (mw *EnhancedGinAuthMiddleware) RefreshHandler(c *gin.Context) {
 // GetUserSessionsHandler returns active sessions for the current user
 func (mw *EnhancedGinAuthMiddleware) GetUserSessionsHandler(c *gin.Context) {
 	userID := c.MustGet(mw.Config.IdentityKey).(string)
-	
+
 	if mw.Config.TokenStorage != nil {
 		sessions, err := mw.Config.TokenStorage.GetUserActiveSessions(userID)
 		if err != nil {

@@ -8,25 +8,25 @@ type TokenStorage interface {
 	StoreTokenPair(sessionID string, accessToken, refreshToken string, accessExpiresAt, refreshExpiresAt time.Time, userID string) error
 	GetAccessToken(sessionID string) (string, error)
 	GetRefreshToken(sessionID string) (string, error)
-	
+
 	// Token validation
 	IsAccessTokenValid(sessionID string) (bool, error)
 	IsRefreshTokenValid(sessionID string) (bool, error)
-	
+
 	// Token management
 	DeleteTokenPair(sessionID string) error
 	RefreshTokenPair(sessionID string, newAccessToken, newRefreshToken string, accessExpiresAt, refreshExpiresAt time.Time) error
-	
+
 	// User session management
 	RevokeAllUserTokens(userID string) error
 	GetUserActiveSessions(userID string) ([]string, error)
-	
+
 	// Session tracking
 	StoreUserSession(session UserSession) error
 	GetUserSession(sessionID string) (*UserSession, error)
 	UpdateSessionActivity(sessionID string, lastActivity time.Time) error
 	DeleteUserSession(sessionID string) error
-	
+
 	// Cleanup expired tokens
 	CleanupExpiredTokens() error
 }
@@ -38,6 +38,14 @@ type UserProvider interface {
 	GetUserByEmail(email string) (*User, error)
 	UpdateUserLastLogin(userID string, lastLogin time.Time) error
 	IsUserActive(userID string) (bool, error)
+}
+
+// UserCreator interface for creating new users
+type UserCreator interface {
+	CreateUser(user *User) error
+	UserExists(username string, email string) (bool, error)
+	IsUsernameAvailable(username string) (bool, error)
+	IsEmailAvailable(email string) (bool, error)
 }
 
 // Role-based access control interface
