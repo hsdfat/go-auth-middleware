@@ -451,7 +451,8 @@ func (mw *EnhancedGinAuthMiddleware) RegisterHandler(c *gin.Context) {
 		ID:           userID,
 		Username:     regReq.Username,
 		Email:        regReq.Email,
-		PasswordHash: passwordHash,
+		Password:     regReq.Password,     // Pass plain password to UserCreator
+		PasswordHash: passwordHash,        // Also provide the hash
 		Role:         userRole,
 		IsActive:     true,
 		CreatedAt:    now,
